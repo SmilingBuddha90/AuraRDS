@@ -19,6 +19,69 @@ A smart robot that:
 | AWS sandbox account with admin access | [ ] |
 | Amazon Bedrock Claude Sonnet 4 access enabled | [ ] |
 | Finout account with Client ID and API Key | [ ] |
+| IAM role with Bedrock + EC2 + Cost Explorer permissions (e.g. `RDS_Agentic_WAR`) | [ ] |
+
+---
+
+## Cloud9 Pre-Requisites — Read Before You Start
+
+Cloud9 has some quirks that will break your work if you don't address them upfront.
+Spend 5 minutes on these now to avoid frustration later.
+
+---
+
+### PRE-REQ 1 — Disable Auto-Hibernate
+
+By default Cloud9 shuts down your EC2 instance after 30 minutes of browser
+inactivity. Any running jobs (cost review, Streamlit) will be killed.
+
+**Fix — turn off auto-hibernate before doing anything else:**
+
+1. Open your Cloud9 environment
+2. Click **Cloud9** (top menu) → **Preferences**
+3. Click **EC2 Instance** in the left panel
+4. Set **"Stop my environment"** to **Never**
+5. Close preferences
+
+---
+
+### PRE-REQ 2 — Disable Managed Temporary Credentials
+
+Cloud9 injects its own temporary AWS credentials into `~/.aws/credentials`.
+These expire and cause `ExpiredToken` errors mid-run. Replace them with an
+IAM instance profile (permanent, auto-refreshing).
+
+**Fix — done in STEP 2 of this guide.** Just be aware: if you skip STEP 2,
+you will hit credential errors during deployment.
+
+---
+
+### PRE-REQ 3 — Plan for Long-Running Jobs (Use nohup)
+
+A full 3-pillar cost review takes 3–8 minutes. If you close the Cloud9 browser
+tab mid-run, the process is killed and you lose the output.
+
+**Fix — always run long jobs with `nohup`** (covered in STEP 12):
+```bash
+nohup python main.py --local "Full review" > ~/reports/review.log 2>&1 &
+tail -f ~/reports/review.log
+```
+
+---
+
+### PRE-REQ 4 — Know Your Recovery Steps (After Cloud9 Wakes Up)
+
+Every time Cloud9 hibernates and restarts, you need to run these 3 commands:
+
+```bash
+rm -f ~/.aws/credentials          # clear stale credentials
+aws configure set region us-east-1
+cd ~/environment/finout-rds-review/app/agent && source .venv/bin/activate
+```
+
+You can automate the venv step permanently (done in STEP 6).
+
+> For the full list of Cloud9 known issues and gotchas, see [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -148,7 +211,12 @@ Your prompt changes to:
 (.venv) nct-admin:~/environment/finout-rds-review/app/agent $
 ```
 
-> Every new terminal: run `source .venv/bin/activate` again.
+**Auto-activate on every new terminal (do this once — prevents PRE-REQ 4 issue):**
+```bash
+echo 'cd ~/environment/finout-rds-review/app/agent && source .venv/bin/activate' >> ~/.bashrc
+```
+
+After this, every new Cloud9 terminal automatically activates the venv.
 
 ---
 
@@ -221,8 +289,22 @@ mkdir -p ~/reports
 
 ## STEP 12 — Run CLI Review (Command Line)
 
+**Option A — Run in the foreground (simple, loses output if browser closes):**
 ```bash
 python main.py --local "Full Finout cost review of my RDS/Aurora fleet"
+```
+
+**Option B — Run in background with nohup (recommended — safe if Cloud9 hibernates):**
+```bash
+nohup python main.py --local "Full Finout cost review of my RDS/Aurora fleet" \
+  > ~/reports/review_log.txt 2>&1 &
+echo "Running in background. PID: $!"
+tail -f ~/reports/review_log.txt   # watch live output; Ctrl+C to stop watching
+```
+
+The review keeps running even if Cloud9 hibernates. When it wakes up, check progress:
+```bash
+tail -f ~/reports/review_log.txt
 ```
 
 Report saved to `~/reports/finout_rds_review_DATE.docx`
@@ -240,25 +322,33 @@ Install Streamlit in the same venv:
 pip install streamlit
 ```
 
-Run the app:
+Run the app on port **8080** — Cloud9 Preview only works on ports 8080, 8081, or 8082:
 
 ```bash
 cd ~/environment/finout-rds-review/app/streamlit
-streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+streamlit run app.py --server.port 8080 --server.address localhost
 ```
 
-**Access the UI in your browser:**
+**Access the UI inside Cloud9:**
+1. Click **Preview** (top menu) → **Preview Running Application**
+2. A mini browser panel opens — Streamlit loads automatically on port 8080
 
-Cloud9 does not expose ports directly. Use the **Preview** feature:
-1. In Cloud9 → click **Preview** (top menu) → **Preview Running Application**
-2. A mini browser opens inside Cloud9
-3. Change the port in the URL to `8501`
-
-Or use SSH port forwarding from your laptop:
+**Keep Streamlit running after you close the terminal (use nohup):**
 ```bash
-ssh -i your-key.pem -L 8501:localhost:8501 ec2-user@YOUR-CLOUD9-EC2-IP
+nohup streamlit run app.py \
+  --server.port 8080 \
+  --server.address localhost \
+  > ~/reports/streamlit.log 2>&1 &
+echo "Streamlit running. PID: $!"
 ```
-Then open `http://localhost:8501` in your laptop browser.
+
+Then click **Preview → Preview Running Application** to open the UI.
+
+**Or access from your laptop browser via SSH port forwarding:**
+```bash
+ssh -i your-key.pem -L 8080:localhost:8080 ec2-user@YOUR-CLOUD9-EC2-IP
+```
+Then open `http://localhost:8080` in your laptop browser.
 
 ---
 
@@ -267,8 +357,12 @@ Then open `http://localhost:8501` in your laptop browser.
 | Error | Fix |
 |-------|-----|
 | `ExpiredToken` | `rm -f ~/.aws/credentials` then retry |
-| `(.venv)` missing | `source .venv/bin/activate` |
+| `(.venv)` missing from prompt | `source .venv/bin/activate` |
 | `ModuleNotFoundError` | `pip install -r requirements.txt` |
 | `401 Unauthorized` Finout | Re-check `.env` keys |
 | Bedrock `AccessDeniedException` | Enable Claude in Bedrock Model access |
 | Disk full | Re-run Step 3 resize |
+| Cloud9 Preview shows "unable to connect" | Make sure Streamlit runs on port 8080, not 8501 |
+| Review job stopped mid-run | Cloud9 hibernated — use `nohup` next time (Step 12 Option B) |
+| Cloud9 won't open after browser close | Go to EC2 Console → start the `aws-cloud9-*` instance manually |
+| Auto-hibernate keeps killing jobs | Set Cloud9 → Preferences → EC2 Instance → Stop → Never (PRE-REQ 1) |
