@@ -33,6 +33,6 @@ finout-rds-review/
 ├── DEPLOYMENT.md               ← This file
 ├── DEPLOYMENT_CLOUD9.md        ← Cloud9 step-by-step guide
 ├── DEPLOYMENT_EC2.md           ← EC2 step-by-step guide
-├── SETUP.md
+├── SECURITY.md                 ← Security layers + Cloud9 known issues
 └── README.md
 ```
